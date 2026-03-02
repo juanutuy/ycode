@@ -11,6 +11,8 @@ interface FilterableCollectionProps {
   filters: ConditionalVisibility;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  sortByInputLayerId?: string;
+  sortOrderInputLayerId?: string;
   limit?: number;
   paginationMode?: 'pages' | 'load_more';
   layerTemplate: Layer[];
@@ -23,6 +25,8 @@ export default function FilterableCollection({
   filters,
   sortBy,
   sortOrder,
+  sortByInputLayerId,
+  sortOrderInputLayerId,
   limit,
   paginationMode,
   layerTemplate,
@@ -60,6 +64,29 @@ export default function FilterableCollection({
   const fpKey = `fp_${strippedId}`;
 
   const filterValues = useFilterStore((state) => state.values);
+
+  const findLinkedInputValue = useCallback((inputLayerId?: string): string => {
+    if (!inputLayerId) return '';
+    for (const layerValues of Object.values(filterValues)) {
+      if (inputLayerId in layerValues) {
+        return layerValues[inputLayerId] || '';
+      }
+    }
+    return '';
+  }, [filterValues]);
+
+  const linkedSortByValue = findLinkedInputValue(sortByInputLayerId).trim();
+  const linkedSortOrderValue = findLinkedInputValue(sortOrderInputLayerId).trim().toLowerCase();
+
+  const isLinkedSortByValid = linkedSortByValue.length > 0 && linkedSortByValue !== 'none';
+  const isLinkedSortOrderValid = linkedSortOrderValue === 'asc' || linkedSortOrderValue === 'desc';
+
+  const effectiveSortBy = isLinkedSortByValid ? linkedSortByValue : sortBy;
+  const effectiveSortOrder = (isLinkedSortOrderValid ? linkedSortOrderValue : sortOrder) as 'asc' | 'desc' | undefined;
+  const hasRuntimeSortOverride = Boolean(
+    (sortByInputLayerId && isLinkedSortByValid) ||
+    (sortOrderInputLayerId && isLinkedSortOrderValid)
+  );
 
   const buildApiFilters = useCallback(() => {
     // Conditions within the same original group are ORed (e.g. Free OR Paid).
@@ -343,7 +370,6 @@ export default function FilterableCollection({
   const goToFilteredPage = useCallback((page: number) => {
     if (page < 1 || page > filteredTotalPages || isFiltering) return;
     const groups = buildApiFilters();
-    if (groups.length === 0) return;
     const offset = (page - 1) * (limit || 10);
     setFilteredPage(page);
     syncFilteredPageToUrl(page);
@@ -357,7 +383,6 @@ export default function FilterableCollection({
   const handleLoadMore = useCallback(() => {
     if (isFiltering || !filteredHasMore) return;
     const groups = buildApiFilters();
-    if (groups.length === 0) return;
     fetchFilteredRef.current(groups, loadMoreOffsetRef.current, true);
   }, [isFiltering, filteredHasMore, buildApiFilters]);
 
@@ -410,14 +435,12 @@ export default function FilterableCollection({
     offset: number,
     append: boolean,
   ) => {
-    if (filterGroups.length === 0) return;
-
     const requestKey = JSON.stringify({
       filterGroups,
       offset,
       append,
-      sortBy,
-      sortOrder,
+      sortBy: effectiveSortBy,
+      sortOrder: effectiveSortOrder,
       limit,
     });
     if (inFlightRequestKeyRef.current === requestKey) return;
@@ -436,8 +459,8 @@ export default function FilterableCollection({
         layerTemplate,
         collectionLayerId,
         filterGroups,
-        sortBy,
-        sortOrder,
+        sortBy: effectiveSortBy,
+        sortOrder: effectiveSortOrder,
         limit,
         offset,
         published: true,
@@ -497,7 +520,7 @@ export default function FilterableCollection({
           abortRef.current = null;
         }
       });
-  }, [collectionId, collectionLayerId, layerTemplate, sortBy, sortOrder, limit, paginationMode, updateEmptyStateElements]);
+  }, [collectionId, collectionLayerId, layerTemplate, effectiveSortBy, effectiveSortOrder, limit, paginationMode, updateEmptyStateElements]);
 
   // Stable ref so goToFilteredPage (via intercept handler) can call fetchFiltered
   const fetchFilteredRef = useRef(fetchFiltered);
@@ -507,13 +530,19 @@ export default function FilterableCollection({
 
   useEffect(() => {
     const filterGroups = buildApiFilters();
-    const filterKey = JSON.stringify(filterGroups);
+    const hasRuntimeControls = filterGroups.length > 0 || hasRuntimeSortOverride;
+    const filterKey = JSON.stringify({
+      filterGroups,
+      sortBy: effectiveSortBy,
+      sortOrder: effectiveSortOrder,
+      hasRuntimeControls,
+    });
 
     if (filterKey === prevFilterKeyRef.current) return;
     const wasEmpty = prevFilterKeyRef.current === '' || prevFilterKeyRef.current === '[]';
     prevFilterKeyRef.current = filterKey;
 
-    if (filterGroups.length === 0) {
+    if (!hasRuntimeControls) {
       // Remove filtered page param from URL
       const cleanUrl = new URL(window.location.href);
       if (cleanUrl.searchParams.has(fpKey)) {
@@ -589,7 +618,7 @@ export default function FilterableCollection({
     fetchFiltered(filterGroups, startOffset, false);
 
     return () => abortRef.current?.abort();
-  }, [filterValues, buildApiFilters, fetchFiltered, paginationMode, attachPaginationIntercept, detachPaginationIntercept, restoreSsrPagination, getSsrPaginationWrapper, updateEmptyStateElements, fpKey, pKey, limit]);
+  }, [filterValues, buildApiFilters, fetchFiltered, paginationMode, attachPaginationIntercept, detachPaginationIntercept, restoreSsrPagination, getSsrPaginationWrapper, updateEmptyStateElements, fpKey, pKey, limit, hasRuntimeSortOverride, effectiveSortBy, effectiveSortOrder]);
 
   // Update SSR pagination display when filtered page/total changes (pages mode)
   useEffect(() => {

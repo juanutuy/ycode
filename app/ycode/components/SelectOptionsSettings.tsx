@@ -8,7 +8,7 @@
  * (each item becomes an option with value=itemId, label=displayField).
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 
 import {
   DndContext,
@@ -69,6 +69,16 @@ interface OptionData {
   value: string;
 }
 
+const SOURCE_SORT_BY = '__source_sort_by__';
+const SOURCE_SORT_ORDER = '__source_sort_order__';
+
+const SORT_ORDER_PRESET_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: 'Ascending', value: 'asc' },
+  { label: 'Descending', value: 'desc' },
+];
+
+const EMPTY_FIELDS: never[] = [];
+
 /**
  * Extract option data from select layer children
  */
@@ -93,6 +103,12 @@ function getOptionsFromLayer(layer: Layer): OptionData[] {
         value: child.attributes?.value || '',
       };
     });
+}
+
+function isSortOrderPreset(options: OptionData[]): boolean {
+  if (options.length !== SORT_ORDER_PRESET_OPTIONS.length) return false;
+  const values = options.map((o) => o.value);
+  return SORT_ORDER_PRESET_OPTIONS.every((preset) => values.includes(preset.value));
 }
 
 /**
@@ -318,9 +334,7 @@ export default function SelectOptionsSettings({
   const isSelectLayer = layer?.name === 'select';
   const optionsSource = layer?.settings?.optionsSource;
   const isCollectionSource = !!optionsSource?.collectionId;
-  const sourceCollectionName = isCollectionSource
-    ? collections.find(c => c.id === optionsSource!.collectionId)?.name
-    : null;
+  const explicitOptionsMode = layer?.settings?.selectOptionsMode;
   const sourceCollectionFields = isCollectionSource
     ? (fields[optionsSource!.collectionId] || [])
     : [];
@@ -328,7 +342,23 @@ export default function SelectOptionsSettings({
   const options = isSelectLayer && layer && !isCollectionSource ? getOptionsFromLayer(layer) : [];
   const sourceValue = isCollectionSource
     ? optionsSource!.collectionId
-    : options.length > 0 ? 'list' : 'none';
+    : explicitOptionsMode === 'sort_by'
+      ? SOURCE_SORT_BY
+      : explicitOptionsMode === 'sort_order'
+        ? SOURCE_SORT_ORDER
+        : isSortOrderPreset(options)
+          ? SOURCE_SORT_ORDER
+          : options.length > 0
+            ? 'list'
+            : 'none';
+  const isSortOrderMode = sourceValue === SOURCE_SORT_ORDER;
+  const isSortByMode = sourceValue === SOURCE_SORT_BY;
+
+  const sortByCollectionId = layer?.settings?.sortByCollectionId;
+  const rawSortByFieldIds = layer?.settings?.sortByFieldIds;
+  const sortByFieldIds = useMemo(() => rawSortByFieldIds || [], [rawSortByFieldIds]);
+  const rawSortByFields = sortByCollectionId ? fields[sortByCollectionId] : undefined;
+  const sortByCollectionFields = useMemo(() => rawSortByFields || EMPTY_FIELDS, [rawSortByFields]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -342,25 +372,85 @@ export default function SelectOptionsSettings({
     if (!layer) return;
 
     if (value === 'none' || value === 'list') {
-      const { optionsSource: _, ...restSettings } = layer.settings || {};
-      onLayerUpdate(layer.id, {
-        settings: Object.keys(restSettings).length > 0 ? restSettings : undefined,
-      });
-    } else {
+      const { optionsSource: _, sortByCollectionId: _sb, sortByFieldIds: _sf, ...restSettings } = layer.settings || {};
       onLayerUpdate(layer.id, {
         settings: {
-          ...layer.settings,
+          ...restSettings,
+          selectOptionsMode: value === 'list' ? 'list' : undefined,
+        },
+      });
+    } else if (value === SOURCE_SORT_BY) {
+      const { optionsSource: _, sortByCollectionId: _sb, sortByFieldIds: _sf, ...restSettings } = layer.settings || {};
+      onLayerUpdate(layer.id, {
+        settings: {
+          ...restSettings,
+          selectOptionsMode: 'sort_by',
+        },
+        children: [buildOptionLayer(generateId('lyr'), 'None', 'none')],
+      });
+    } else if (value === SOURCE_SORT_ORDER) {
+      const { optionsSource: _, sortByCollectionId: _sb, sortByFieldIds: _sf, ...restSettings } = layer.settings || {};
+      onLayerUpdate(layer.id, {
+        settings: {
+          ...restSettings,
+          selectOptionsMode: 'sort_order',
+        },
+        children: SORT_ORDER_PRESET_OPTIONS.map((opt, idx) => buildOptionLayer(`${layer.id}-preset-${idx}-${generateId('opt')}`, opt.label, opt.value)),
+      });
+    } else {
+      const { sortByCollectionId: _sb, sortByFieldIds: _sf, ...restSettings } = layer.settings || {};
+      onLayerUpdate(layer.id, {
+        settings: {
+          ...restSettings,
+          selectOptionsMode: undefined,
           optionsSource: { collectionId: value },
         },
       });
     }
   }, [layer, onLayerUpdate]);
 
+  const handleSortByCollectionChange = useCallback((collectionId: string) => {
+    if (!layer) return;
+    onLayerUpdate(layer.id, {
+      settings: {
+        ...layer.settings,
+        sortByCollectionId: collectionId === 'none' ? undefined : collectionId,
+        sortByFieldIds: undefined,
+      },
+    });
+  }, [layer, onLayerUpdate]);
+
+  const handleToggleSortByField = useCallback((fieldId: string) => {
+    if (!layer) return;
+    const current = layer.settings?.sortByFieldIds || [];
+    const next = current.includes(fieldId)
+      ? current.filter((id) => id !== fieldId)
+      : [...current, fieldId];
+    onLayerUpdate(layer.id, {
+      settings: {
+        ...layer.settings,
+        sortByFieldIds: next.length > 0 ? next : undefined,
+      },
+    });
+  }, [layer, onLayerUpdate]);
+
+  // Load fields for collection-sourced options
   useEffect(() => {
     if (!isCollectionSource || !optionsSource?.collectionId) return;
     if (sourceCollectionFields.length > 0) return;
-    loadFields(optionsSource.collectionId);
+    let cancelled = false;
+    if (!cancelled) loadFields(optionsSource.collectionId);
+    return () => { cancelled = true; };
   }, [isCollectionSource, optionsSource?.collectionId, sourceCollectionFields.length, loadFields]);
+
+  // Load fields for sort-by collection
+  useEffect(() => {
+    if (!isSortByMode || !sortByCollectionId) return;
+    if (sortByCollectionFields.length > 0) return;
+    let cancelled = false;
+    if (!cancelled) loadFields(sortByCollectionId);
+    return () => { cancelled = true; };
+  }, [isSortByMode, sortByCollectionId, sortByCollectionFields.length, loadFields]);
 
   const patchOptionsSource = useCallback((patch: Record<string, any>) => {
     if (!layer || !optionsSource?.collectionId) return;
@@ -534,6 +624,93 @@ export default function SelectOptionsSettings({
     [layer, onLayerUpdate]
   );
 
+  const handleSortOrderLabelChange = useCallback((sortValue: 'asc' | 'desc', label: string) => {
+    if (!layer) return;
+    const currentChildren = (layer.children || []).filter((child) => child.name === 'option');
+    const byValue = new Map<string, Layer>();
+    for (const child of currentChildren) {
+      byValue.set(String(child.attributes?.value || ''), child);
+    }
+
+    const ascLayer = byValue.get('asc') || buildOptionLayer(generateId('lyr'), 'Ascending', 'asc');
+    const descLayer = byValue.get('desc') || buildOptionLayer(generateId('lyr'), 'Descending', 'desc');
+
+    const nextAscLabel = sortValue === 'asc' ? label : getOptionsFromLayer({ ...layer, children: [ascLayer] } as Layer)[0]?.label || 'Ascending';
+    const nextDescLabel = sortValue === 'desc' ? label : getOptionsFromLayer({ ...layer, children: [descLayer] } as Layer)[0]?.label || 'Descending';
+
+    onLayerUpdate(layer.id, {
+      children: [
+        buildOptionLayer(ascLayer.id, nextAscLabel, 'asc'),
+        buildOptionLayer(descLayer.id, nextDescLabel, 'desc'),
+      ],
+    });
+  }, [layer, onLayerUpdate]);
+
+  // Stable signature of current option children values — used by effects below
+  // to avoid re-running on every unrelated layer mutation.
+  const currentOptionSignature = useMemo(() => {
+    if (!layer) return '';
+    return (layer.children || [])
+      .filter((c) => c.name === 'option')
+      .map((c) => String(c.attributes?.value || ''))
+      .join(',');
+  }, [layer]);
+
+  // Keep sort-order options structurally fixed: two options with immutable values.
+  useEffect(() => {
+    if (!layer || !isSortOrderMode) return;
+    const optionChildren = (layer.children || []).filter((child) => child.name === 'option');
+    const current = optionChildren.map((child) => ({
+      id: child.id,
+      value: String(child.attributes?.value || ''),
+      label: child.variables?.text?.type === 'dynamic_text'
+        ? String(child.variables.text.data.content || '')
+        : '',
+    }));
+    const ascExisting = current.find((opt) => opt.value === 'asc');
+    const descExisting = current.find((opt) => opt.value === 'desc');
+    const needsNormalize =
+      current.length !== 2 ||
+      !ascExisting ||
+      !descExisting ||
+      ascExisting.value !== 'asc' ||
+      descExisting.value !== 'desc';
+
+    if (!needsNormalize) return;
+
+    onLayerUpdate(layer.id, {
+      children: [
+        buildOptionLayer(ascExisting?.id || generateId('lyr'), ascExisting?.label || 'Ascending', 'asc'),
+        buildOptionLayer(descExisting?.id || generateId('lyr'), descExisting?.label || 'Descending', 'desc'),
+      ],
+    });
+  }, [layer?.id, isSortOrderMode, currentOptionSignature, onLayerUpdate]);
+
+  // Regenerate sort-by option children when field selection or field data changes.
+  useEffect(() => {
+    if (!layer || !isSortByMode) return;
+
+    const existingValues = currentOptionSignature.split(',');
+    const desiredValues = ['none'];
+    if (sortByCollectionId && sortByFieldIds.length > 0 && sortByCollectionFields.length > 0) {
+      for (const fid of sortByFieldIds) {
+        if (sortByCollectionFields.some((f) => f.id === fid)) {
+          desiredValues.push(fid);
+        }
+      }
+    }
+
+    if (existingValues.join(',') === desiredValues.join(',')) return;
+
+    const noneChild = buildOptionLayer(`${layer.id}-sort-none`, 'None', 'none');
+    const fieldChildren = sortByFieldIds
+      .map((fid) => sortByCollectionFields.find((f) => f.id === fid))
+      .filter(Boolean)
+      .map((field) => buildOptionLayer(`${layer.id}-sbf-${field!.id}`, field!.name, field!.id));
+
+    onLayerUpdate(layer.id, { children: [noneChild, ...fieldChildren] });
+  }, [layer?.id, isSortByMode, sortByCollectionId, sortByFieldIds, sortByCollectionFields, currentOptionSignature, onLayerUpdate]);
+
   // Only show for select elements
   if (!layer || !isSelectLayer) {
     return null;
@@ -546,7 +723,7 @@ export default function SelectOptionsSettings({
       isOpen={isOpen}
       onToggle={() => setIsOpen(!isOpen)}
       action={
-        !isCollectionSource ? (
+        !isCollectionSource && !isSortOrderMode && !isSortByMode ? (
           <Popover open={showAddPopover} onOpenChange={setShowAddPopover}>
             <PopoverTrigger asChild>
               <Button
@@ -624,6 +801,11 @@ export default function SelectOptionsSettings({
                     List
                   </span>
                 </SelectItem>
+                <SelectGroup>
+                  <SelectLabel>Sorting options</SelectLabel>
+                  <SelectItem value={SOURCE_SORT_BY}>Sort by</SelectItem>
+                  <SelectItem value={SOURCE_SORT_ORDER}>Sort order</SelectItem>
+                </SelectGroup>
                 {collections.length > 0 && (
                   <SelectGroup>
                     <SelectLabel>Collections</SelectLabel>
@@ -736,10 +918,99 @@ export default function SelectOptionsSettings({
           </>
         )}
 
-        {/* Static options editor (only when not using collection source) */}
-        {!isCollectionSource && (
+        {/* Sort-by mode: collection picker + field checklist */}
+        {isSortByMode && (
           <>
-            {options.length > 0 ? (
+            <div className="grid grid-cols-3 items-center">
+              <Label variant="muted">Collection</Label>
+              <div className="col-span-2">
+                <Select
+                  value={sortByCollectionId || 'none'}
+                  onValueChange={handleSortByCollectionChange}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Choose..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {collections.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <Icon name="database" className="size-3 opacity-60" />
+                          {c.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {!sortByCollectionId && (
+              <p className="text-[10px] text-muted-foreground leading-tight">
+                Choose the collection this select will control sorting for.
+              </p>
+            )}
+
+            {sortByCollectionId && (
+              <>
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Fields</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                {sortByCollectionFields.length === 0 ? (
+                  <div className="text-xs text-muted-foreground px-1">Loading fields...</div>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {sortByCollectionFields.map((field) => (
+                      <label
+                        key={field.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted cursor-pointer text-xs"
+                      >
+                        <input
+                          type="checkbox"
+                          className="rounded border-border"
+                          checked={sortByFieldIds.includes(field.id)}
+                          onChange={() => handleToggleSortByField(field.id)}
+                        />
+                        <span className="truncate">{field.name}</span>
+                        <span className="ml-auto text-muted-foreground text-[10px] shrink-0">{field.type}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {/* Static options editor (only when not using collection source) */}
+        {!isCollectionSource && !isSortByMode && (
+          <>
+            {isSortOrderMode ? (
+              <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-3 items-center">
+                  <Label variant="muted">Ascending</Label>
+                  <div className="col-span-2 *:w-full">
+                    <Input
+                      value={options.find((opt) => opt.value === 'asc')?.label || 'Ascending'}
+                      onChange={(e) => handleSortOrderLabelChange('asc', e.target.value)}
+                      placeholder="Ascending"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 items-center">
+                  <Label variant="muted">Descending</Label>
+                  <div className="col-span-2 *:w-full">
+                    <Input
+                      value={options.find((opt) => opt.value === 'desc')?.label || 'Descending'}
+                      onChange={(e) => handleSortOrderLabelChange('desc', e.target.value)}
+                      placeholder="Descending"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : options.length > 0 ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}

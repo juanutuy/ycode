@@ -1690,9 +1690,13 @@ export async function resolveCollectionLayers(
           // Pagination is now a sibling layer, not added here
           const fragmentChildren = clonedLayers;
 
-          // Check if this collection has linked filters (any condition with inputLayerId)
-          const hasLinkedFilters = collectionFilters?.groups?.some(g =>
-            g.conditions.some(c => !!c.inputLayerId)
+          // Check if this collection has any runtime-linked controls (filters or sorting)
+          const hasLinkedFilters = !!(
+            collectionFilters?.groups?.some(g =>
+              g.conditions.some(c => !!c.inputLayerId || !!c.inputLayerId2)
+            ) ||
+            collectionVariable.sort_by_inputLayerId ||
+            collectionVariable.sort_order_inputLayerId
           );
 
           // Return a fragment layer - LayerRenderer will render children directly without wrapper
@@ -1714,9 +1718,11 @@ export async function resolveCollectionLayers(
             _filterConfig: hasLinkedFilters ? {
               collectionId: collectionVariable.id,
               collectionLayerId: layer.id,
-              filters: collectionFilters!,
+              filters: collectionFilters || { groups: [] },
               sortBy: collectionVariable.sort_by,
               sortOrder: collectionVariable.sort_order,
+              sortByInputLayerId: collectionVariable.sort_by_inputLayerId,
+              sortOrderInputLayerId: collectionVariable.sort_order_inputLayerId,
               limit: isPaginated ? paginationConfig.items_per_page : collectionVariable.limit,
               paginationMode: isPaginated ? paginationConfig.mode : undefined,
               layerTemplate: layer.children || [],

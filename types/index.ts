@@ -171,6 +171,9 @@ export interface LayerSettings {
     sortFieldId?: string; // field ID to sort options by (undefined = manual/insertion order)
     sortOrder?: 'asc' | 'desc'; // sort direction (defaults to 'asc')
   };
+  selectOptionsMode?: 'list' | 'sort_by' | 'sort_order'; // Builder source mode for select options
+  sortByCollectionId?: string; // Collection to source sort-by field options from
+  sortByFieldIds?: string[]; // Which field IDs are enabled as sort-by options
 }
 
 // Layer Style Types
@@ -334,6 +337,8 @@ export interface Layer {
     filters: ConditionalVisibility;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
+    sortByInputLayerId?: string;
+    sortOrderInputLayerId?: string;
     limit?: number;
     paginationMode?: 'pages' | 'load_more';
     layerTemplate: Layer[];
@@ -1102,6 +1107,8 @@ export interface CollectionVariable {
   id: string; // Collection ID
   sort_by?: 'none' | 'manual' | 'random' | string; // 'none', 'manual', 'random', or field ID
   sort_order?: 'asc' | 'desc'; // Only used when sort_by is a field ID
+  sort_by_inputLayerId?: string; // Linked filter input controlling sort_by at runtime
+  sort_order_inputLayerId?: string; // Linked filter input controlling sort_order at runtime
   limit?: number; // Maximum number of items to show (deprecated when pagination enabled)
   offset?: number; // Number of items to skip (deprecated when pagination enabled)
   source_field_id?: string; // Field ID from parent item (reference or multi-asset field)
