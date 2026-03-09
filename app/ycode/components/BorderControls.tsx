@@ -386,26 +386,29 @@ export default function BorderControls({ layer, onLayerUpdate, activeTextStyleKe
                       <span className="dark:opacity-50">Add...</span>
                   </Button>
                 ) : (
-                  <InputGroup>
-                    <div className="w-full flex items-center justify-between gap-1 px-2.5">
+                  <Button
+                    variant="input"
+                    size="sm"
+                    className="justify-start w-full"
+                  >
                       <div className="flex items-center gap-2">
                         <div className="size-5 rounded-[6px] shrink-0 -ml-1 relative overflow-hidden outline dark:outline-white/10 outline-offset-[-1px]">
                           <div className="absolute inset-0 z-20" style={{ background: parseBorderColorToCss(borderColor) }} />
                           <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
                         </div>
-
                         <Label variant="muted" className="capitalize">{borderStyle || 'Solid'}</Label>
                       </div>
-                      <Button
-                        size="xs"
-                        className="-mr-1.5"
-                        variant="ghost"
-                        onClick={handleRemoveBorder}
-                      >
-                        <Icon name="x" />
-                      </Button>
-                    </div>
-                  </InputGroup>
+                      <div className="ml-auto">
+                        <Button
+                          size="xs"
+                          className="-mr-1.5"
+                          variant="ghost"
+                          onClick={handleRemoveBorder}
+                        >
+                          <Icon name="x" />
+                        </Button>
+                      </div>
+                  </Button>
                 )}
               </PopoverTrigger>
 
