@@ -28,6 +28,7 @@ export async function getAllColorVariables(): Promise<ColorVariable[]> {
   const { data, error } = await client
     .from('color_variables')
     .select('*')
+    .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true });
 
   if (error) {
@@ -69,9 +70,18 @@ export async function createColorVariable(
     throw new Error('Supabase not configured');
   }
 
+  // Get max sort_order to append at end
+  const { data: maxRow } = await client
+    .from('color_variables')
+    .select('sort_order')
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .single();
+  const nextOrder = (maxRow?.sort_order ?? -1) + 1;
+
   const { data, error } = await client
     .from('color_variables')
-    .insert(variableData)
+    .insert({ ...variableData, sort_order: nextOrder })
     .select()
     .single();
 
@@ -120,5 +130,29 @@ export async function deleteColorVariable(id: string): Promise<void> {
 
   if (error) {
     throw new Error(`Failed to delete color variable: ${error.message}`);
+  }
+}
+
+export async function reorderColorVariables(
+  orderedIds: string[]
+): Promise<void> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const updates = orderedIds.map((id, index) => ({
+    id,
+    sort_order: index,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await client
+    .from('color_variables')
+    .upsert(updates, { onConflict: 'id' });
+
+  if (error) {
+    throw new Error(`Failed to reorder color variables: ${error.message}`);
   }
 }

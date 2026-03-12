@@ -23,6 +23,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/components/ui/context-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Separator } from '@/components/ui/separator';
+import { DndContext, closestCenter, useSensor, useSensors, PointerSensor } from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import SettingsPanel from '@/app/ycode/components/SettingsPanel';
 
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
@@ -832,6 +837,93 @@ interface VarEditState {
   color: string;
 }
 
+interface SortableVariableItemProps {
+  variable: import('@/types').ColorVariable;
+  isActive: boolean;
+  onSelect: (id: string) => void;
+  onStartEdit: (v: import('@/types').ColorVariable) => void;
+  onDelete: (id: string) => void;
+}
+
+function SortableVariableItem({ variable, isActive, onSelect, onStartEdit, onDelete }: SortableVariableItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: variable.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          style={style}
+          className="w-full flex items-center group relative"
+          {...attributes}
+          {...listeners}
+        >
+          <Button
+            variant={isActive ? 'input' : 'ghost'}
+            className="justify-start w-full"
+            onClick={() => onSelect(variable.id)}
+          >
+            <div className="size-5 rounded-[6px] -ml-1 shrink-0 relative overflow-hidden">
+              <div
+                className="absolute inset-0 z-20"
+                style={{ background: hexToRgba(variable.value) }}
+              />
+              <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
+            </div>
+            <Label className="cursor-pointer truncate">
+              {variable.name}
+            </Label>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-1"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Icon name="more" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[120px]">
+              <DropdownMenuItem onClick={() => onStartEdit(variable)}>
+                <Icon name="pencil" />
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => onDelete(variable.id)}
+              >
+                <Icon name="x" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={() => onStartEdit(variable)}>
+          <Icon name="pencil" />
+          Edit
+        </ContextMenuItem>
+        <ContextMenuItem
+          variant="destructive"
+          onClick={() => onDelete(variable.id)}
+        >
+          <Icon name="x" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 interface ColorVariablesSectionProps {
   colorVariables: import('@/types').ColorVariable[];
   activeVariableId: string | null;
@@ -841,6 +933,7 @@ interface ColorVariablesSectionProps {
   onCreate: (name: string, value: string) => Promise<import('@/types').ColorVariable | null>;
   onUpdate: (id: string, data: { name?: string; value?: string }) => Promise<import('@/types').ColorVariable | null>;
   onDelete: (id: string) => Promise<boolean>;
+  onReorder: (orderedIds: string[]) => Promise<void>;
   onSelect: (variableId: string) => void;
 }
 
@@ -853,6 +946,7 @@ function ColorVariablesSection({
   onCreate,
   onUpdate,
   onDelete,
+  onReorder,
   onSelect,
 }: ColorVariablesSectionProps) {
   const handleStartCreate = () => {
@@ -887,6 +981,20 @@ function ColorVariablesSection({
   const handleDelete = async (id: string) => {
     await onDelete(id);
     if (editState?.id === id) onEditStateChange(null);
+  };
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = colorVariables.findIndex((v) => v.id === active.id);
+    const newIndex = colorVariables.findIndex((v) => v.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(colorVariables, oldIndex, newIndex);
+    onReorder(reordered.map((v) => v.id));
   };
 
   const isEditing = editState?.mode === 'edit';
@@ -934,68 +1042,28 @@ function ColorVariablesSection({
             </div>
           ) : (
             <div className="max-h-24 overflow-y-auto no-scrollbar pb-2">
-              {colorVariables.map((v) => (
-                <ContextMenu key={v.id}>
-                  <ContextMenuTrigger asChild>
-                    <div className="w-full flex items-center group relative">
-                      <Button
-                        variant={activeVariableId === v.id ? 'input' : 'ghost'}
-                        className="justify-start w-full"
-                        onClick={() => onSelect(v.id)}
-                      >
-                        <div className="size-5 rounded-[6px] -ml-1 shrink-0 relative overflow-hidden">
-                          <div
-                            className="absolute inset-0 z-20"
-                            style={{ background: hexToRgba(v.value) }}
-                          />
-                          <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
-                        </div>
-                        <Label className="cursor-pointer truncate">
-                          {v.name}
-                        </Label>
-                      </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-1"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Icon name="more" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-[120px]">
-                          <DropdownMenuItem onClick={() => handleStartEdit(v)}>
-                            <Icon name="pencil" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => handleDelete(v.id)}
-                          >
-                            <Icon name="x" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent>
-                    <ContextMenuItem onClick={() => handleStartEdit(v)}>
-                      <Icon name="pencil" />
-                      Edit
-                    </ContextMenuItem>
-                    <ContextMenuItem
-                      variant="destructive"
-                      onClick={() => handleDelete(v.id)}
-                    >
-                      <Icon name="x" />
-                      Delete
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              ))}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={colorVariables.map((v) => v.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {colorVariables.map((v) => (
+                    <SortableVariableItem
+                      key={v.id}
+                      variable={v}
+                      isActive={activeVariableId === v.id}
+                      onSelect={onSelect}
+                      onStartEdit={handleStartEdit}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
             </div>
           )}
         </div>
@@ -1030,6 +1098,7 @@ export default function ColorPicker({
   const cvCreate = useColorVariablesStore((s) => s.createColorVariable);
   const cvUpdate = useColorVariablesStore((s) => s.updateColorVariable);
   const cvDelete = useColorVariablesStore((s) => s.deleteColorVariable);
+  const cvReorder = useColorVariablesStore((s) => s.reorderColorVariables);
   const setPreviewOverride = useColorVariablesStore((s) => s.setPreviewOverride);
   const [varEditState, setVarEditState] = useState<VarEditState | null>(null);
 
@@ -2366,6 +2435,7 @@ export default function ColorPicker({
           onCreate={cvCreate}
           onUpdate={cvUpdate}
           onDelete={cvDelete}
+          onReorder={cvReorder}
           onSelect={(varId) => {
             const tab = tabBeforeVarEdit.current || activeTab;
             const stop = stopBeforeVarEdit.current || selectedStopId;

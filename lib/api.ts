@@ -874,6 +874,13 @@ export const colorVariablesApi = {
       method: 'DELETE',
     });
   },
+
+  async reorder(orderedIds: string[]): Promise<ApiResponse<{ success: boolean }>> {
+    return apiRequest<{ success: boolean }>('/ycode/api/color-variables/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  },
 };
 
 /**

@@ -1036,6 +1036,7 @@ export interface ColorVariable {
   id: string;
   name: string;
   value: string;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }

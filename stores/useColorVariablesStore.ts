@@ -21,6 +21,7 @@ interface ColorVariablesActions {
   createColorVariable: (name: string, value: string) => Promise<ColorVariable | null>;
   updateColorVariable: (id: string, data: { name?: string; value?: string }) => Promise<ColorVariable | null>;
   deleteColorVariable: (id: string) => Promise<boolean>;
+  reorderColorVariables: (orderedIds: string[]) => Promise<void>;
   getVariableById: (id: string) => ColorVariable | undefined;
   setPreviewOverride: (override: { id: string; value: string } | null) => void;
   generateCssDeclarations: () => string;
@@ -177,6 +178,25 @@ export const useColorVariablesStore = create<ColorVariablesStore>((set, get) => 
       const message = error instanceof Error ? error.message : 'Failed to delete color variable';
       set({ error: message });
       return false;
+    }
+  },
+
+  reorderColorVariables: async (orderedIds) => {
+    const { colorVariables } = get();
+    const reordered = orderedIds
+      .map((id, index) => {
+        const v = colorVariables.find((cv) => cv.id === id);
+        return v ? { ...v, sort_order: index } : null;
+      })
+      .filter(Boolean) as ColorVariable[];
+
+    set({ colorVariables: reordered });
+
+    try {
+      await colorVariablesApi.reorder(orderedIds);
+    } catch (error) {
+      console.error('Failed to persist color variable order:', error);
+      set({ colorVariables });
     }
   },
 
