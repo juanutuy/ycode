@@ -225,6 +225,7 @@ export interface LayerSettings {
   selectOptionsMode?: 'list' | 'sort_by' | 'sort_order'; // Builder source mode for select options
   sortByCollectionId?: string; // Collection to source sort-by field options from
   sortByFieldIds?: string[]; // Which field IDs are enabled as sort-by options
+  placeholder?: string; // Placeholder text for select elements (rendered as first disabled option)
 }
 
 // Layer Style Types

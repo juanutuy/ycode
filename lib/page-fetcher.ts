@@ -1962,13 +1962,14 @@ export async function resolveCollectionLayers(
         const defaultItemId = opts.defaultItemId;
         const hasDefault = !!(defaultItemId && sourceItems.some(i => i.id === defaultItemId));
 
+        const placeholderText = layer.settings?.placeholder || 'Select...';
         const placeholderOption: Layer = {
           id: `${layer.id}-opt-placeholder`,
           name: 'option',
           classes: '',
-          attributes: { value: '' },
+          attributes: { value: '', disabled: true, hidden: true },
           variables: {
-            text: { type: 'dynamic_text' as const, data: { content: 'Select...' } },
+            text: { type: 'dynamic_text' as const, data: { content: placeholderText } },
           },
         };
 
@@ -1989,7 +1990,7 @@ export async function resolveCollectionLayers(
           ...layer,
           attributes: {
             ...(layer.attributes || {}),
-            ...(hasDefault ? { value: defaultItemId } : {}),
+            ...(hasDefault ? { value: defaultItemId } : { value: '' }),
           },
           children: [placeholderOption, ...generatedOptions],
         };

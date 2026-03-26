@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useFilterStore } from '@/stores/useFilterStore';
 import type { ConditionalVisibility, Layer } from '@/types';
+import { isDatePreset, resolveDateFilterValue } from '@/lib/collection-field-utils';
 
 interface FilterableCollectionProps {
   children: React.ReactNode;
@@ -18,6 +19,8 @@ interface FilterableCollectionProps {
   layerTemplate: Layer[];
 }
 
+const FC_FILTERED_ATTR = 'data-fc-filtered';
+
 export default function FilterableCollection({
   children,
   collectionId,
@@ -31,13 +34,21 @@ export default function FilterableCollection({
   paginationMode,
   layerTemplate,
 }: FilterableCollectionProps) {
-  const ssrRef = useRef<HTMLDivElement>(null);
-  const filteredRef = useRef<HTMLDivElement>(null);
+  const markerRef = useRef<HTMLSpanElement>(null);
+  const ssrChildrenRef = useRef<Element[]>([]);
   const [isFiltering, setIsFiltering] = useState(false);
   const [hasActiveFilters, setHasActiveFilters] = useState(false);
   const prevFilterKeyRef = useRef<string>('');
   const abortRef = useRef<AbortController | null>(null);
   const inFlightRequestKeyRef = useRef<string | null>(null);
+
+  const hasInputLinkedFilters = useMemo(() => {
+    return filters.groups.some(g =>
+      g.conditions.some(c => c.inputLayerId || c.inputLayerId2)
+    );
+  }, [filters]);
+  const [pendingFirstEval, setPendingFirstEval] = useState(hasInputLinkedFilters);
+  const skippedInitialRef = useRef(false);
 
   const [filteredPage, setFilteredPage] = useState(1);
   const [filteredTotalPages, setFilteredTotalPages] = useState(1);
@@ -46,15 +57,11 @@ export default function FilterableCollection({
   const [filteredLoaded, setFilteredLoaded] = useState(0);
   const loadMoreOffsetRef = useRef(0);
 
-  // Store original SSR pagination state so we can restore it when filters clear
   const ssrPaginationTextRef = useRef<string | null>(null);
   const ssrPrevClassRef = useRef<string | null>(null);
   const ssrNextClassRef = useRef<string | null>(null);
   const ssrCountTextRef = useRef<string | null>(null);
   const ssrLoadMoreBtnDisplayRef = useRef<string | null>(null);
-
-  // Track whether we stripped a p_ param so we know the SSR content doesn't
-  // match page 1 and a reload is needed when filters clear.
   const strippedPaginationParamRef = useRef(false);
 
   const strippedId = collectionLayerId.startsWith('lyr-')
@@ -62,6 +69,58 @@ export default function FilterableCollection({
     : collectionLayerId;
   const pKey = `p_${strippedId}`;
   const fpKey = `fp_${strippedId}`;
+
+  // --- DOM helpers: find parent collection layer, hide/show SSR children ---
+
+  const getParent = useCallback(() => {
+    return markerRef.current?.parentElement as HTMLElement | null;
+  }, []);
+
+  const hideSSR = useCallback(() => {
+    ssrChildrenRef.current.forEach(el => {
+      (el as HTMLElement).style.display = 'none';
+    });
+  }, []);
+
+  const showSSR = useCallback(() => {
+    ssrChildrenRef.current.forEach(el => {
+      (el as HTMLElement).style.display = '';
+    });
+  }, []);
+
+  const clearFilteredDOM = useCallback(() => {
+    const parent = getParent();
+    if (!parent) return;
+    parent.querySelectorAll(`[${FC_FILTERED_ATTR}]`).forEach(el => el.remove());
+  }, [getParent]);
+
+  const injectFilteredHTML = useCallback((html: string, append: boolean) => {
+    const parent = getParent();
+    if (!parent) return;
+    if (!append) {
+      clearFilteredDOM();
+    }
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    while (temp.firstChild) {
+      const child = temp.firstChild;
+      if (child instanceof Element) child.setAttribute(FC_FILTERED_ATTR, '');
+      parent.appendChild(child);
+    }
+  }, [getParent, clearFilteredDOM]);
+
+  // Capture SSR children on mount (before paint) and hide if pending
+  useLayoutEffect(() => {
+    if (!markerRef.current) return;
+    const parent = markerRef.current.parentElement;
+    if (!parent) return;
+    ssrChildrenRef.current = Array.from(parent.children).filter(
+      el => el !== markerRef.current
+    );
+    if (pendingFirstEval) {
+      hideSSR();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filterValues = useFilterStore((state) => state.values);
 
@@ -89,12 +148,6 @@ export default function FilterableCollection({
   );
 
   const buildApiFilters = useCallback(() => {
-    // Conditions within the same original group are ORed (e.g. Free OR Paid).
-    // Conditions from different original groups are ANDed (e.g. (Free OR Paid) AND Category).
-    // The API uses: OR between groups, AND within a group.
-    // So we use the distributive property to convert:
-    //   (A OR B) AND C  →  (A AND C) OR (B AND C)
-
     type FilterItem = { fieldId: string; operator: string; value: string; value2?: string; fieldType?: string };
     const operatorsWithoutValue = new Set([
       'is_present',
@@ -114,7 +167,6 @@ export default function FilterableCollection({
       for (const condition of group.conditions) {
         if (!condition.fieldId) continue;
 
-        // Use static values only when bound is not linked to an input.
         let value = condition.inputLayerId ? '' : (condition.value || '');
         let value2 = condition.inputLayerId2 ? '' : condition.value2;
 
@@ -145,7 +197,6 @@ export default function FilterableCollection({
 
         const requiresValue = !operatorsWithoutValue.has(condition.operator);
         if (condition.operator === 'is_between') {
-          // Allow one-sided date range: start-only or end-only
           if (!value && !value2) continue;
         } else if (requiresValue && !value) {
           continue;
@@ -159,9 +210,18 @@ export default function FilterableCollection({
           value = JSON.stringify([value]);
         }
 
+        let resolvedOperator: string = condition.operator;
+        if (condition.fieldType === 'date' && isDatePreset(value)) {
+          const resolved = resolveDateFilterValue(condition.operator, value, value2);
+          if (!resolved) continue;
+          resolvedOperator = resolved.operator;
+          value = resolved.value;
+          value2 = resolved.value2;
+        }
+
         activeInGroup.push({
           fieldId: condition.fieldId,
-          operator: condition.operator,
+          operator: resolvedOperator,
           value,
           value2,
           fieldType: condition.fieldType,
@@ -175,7 +235,6 @@ export default function FilterableCollection({
 
     if (activeByGroup.length === 0) return [];
 
-    // Cross-product to distribute OR-within-group across AND-between-groups
     const MAX_FILTER_GROUPS = 50;
     let result: FilterItem[][] = [[]];
     for (const groupConditions of activeByGroup) {
@@ -243,8 +302,6 @@ export default function FilterableCollection({
     ) as HTMLElement | null;
   }, [collectionLayerId]);
 
-  // --- Pages mode: SSR pagination display ---
-
   const updateSsrPaginationDisplay = useCallback((page: number, totalPages: number) => {
     const wrapper = getSsrPaginationWrapper();
     if (!wrapper) return;
@@ -288,8 +345,6 @@ export default function FilterableCollection({
     }
   }, [getSsrPaginationWrapper]);
 
-  // --- Load More mode: SSR button + count display ---
-
   const updateSsrLoadMoreDisplay = useCallback((loaded: number, total: number, hasMore: boolean) => {
     const wrapper = getSsrPaginationWrapper();
     if (!wrapper) return;
@@ -315,7 +370,6 @@ export default function FilterableCollection({
     const wrapper = getSsrPaginationWrapper();
     if (!wrapper) return;
 
-    // Pages mode state
     if (ssrPaginationTextRef.current !== null) {
       const infoEl = wrapper.querySelector(`[data-layer-id$="-pagination-info"]`) as HTMLElement | null;
       if (infoEl) {
@@ -336,7 +390,6 @@ export default function FilterableCollection({
       ssrNextClassRef.current = null;
     }
 
-    // Load More mode state
     if (ssrCountTextRef.current !== null) {
       const countEl = wrapper.querySelector(`[data-layer-id$="-pagination-count"]`) as HTMLElement | null;
       if (countEl) countEl.textContent = ssrCountTextRef.current;
@@ -350,10 +403,9 @@ export default function FilterableCollection({
     }
   }, [getSsrPaginationWrapper]);
 
-  // --- Click intercepts (pages + load_more share the same wrapper listener) ---
+  // --- Click intercepts ---
 
   const paginationInterceptRef = useRef<((e: Event) => void) | null>(null);
-
   const goToFilteredPageRef = useRef<(page: number) => void>(() => {});
   const handleLoadMoreRef = useRef<() => void>(() => {});
 
@@ -424,7 +476,6 @@ export default function FilterableCollection({
     paginationInterceptRef.current = null;
   }, [getSsrPaginationWrapper]);
 
-  // Stable ref for filteredPage so the intercept handler reads the latest value
   const filteredPageRef = useRef(filteredPage);
   useEffect(() => { filteredPageRef.current = filteredPage; }, [filteredPage]);
 
@@ -484,13 +535,7 @@ export default function FilterableCollection({
           return;
         }
 
-        if (filteredRef.current) {
-          if (append) {
-            filteredRef.current.insertAdjacentHTML('beforeend', data.html ?? '');
-          } else {
-            filteredRef.current.innerHTML = data.html ?? '';
-          }
-        }
+        injectFilteredHTML(data.html ?? '', append);
 
         const total = data.total ?? 0;
         const count = data.count ?? 0;
@@ -520,9 +565,8 @@ export default function FilterableCollection({
           abortRef.current = null;
         }
       });
-  }, [collectionId, collectionLayerId, layerTemplate, effectiveSortBy, effectiveSortOrder, limit, paginationMode, updateEmptyStateElements]);
+  }, [collectionId, collectionLayerId, layerTemplate, effectiveSortBy, effectiveSortOrder, limit, paginationMode, updateEmptyStateElements, injectFilteredHTML]);
 
-  // Stable ref so goToFilteredPage (via intercept handler) can call fetchFiltered
   const fetchFilteredRef = useRef(fetchFiltered);
   useEffect(() => { fetchFilteredRef.current = fetchFiltered; }, [fetchFiltered]);
 
@@ -538,22 +582,30 @@ export default function FilterableCollection({
       hasRuntimeControls,
     });
 
-    if (filterKey === prevFilterKeyRef.current) return;
+    if (filterKey === prevFilterKeyRef.current) {
+      if (pendingFirstEval) {
+        setPendingFirstEval(false);
+        showSSR();
+      }
+      return;
+    }
     const wasEmpty = prevFilterKeyRef.current === '' || prevFilterKeyRef.current === '[]';
+
+    if (wasEmpty && hasInputLinkedFilters && !skippedInitialRef.current) {
+      skippedInitialRef.current = true;
+      return;
+    }
+
     prevFilterKeyRef.current = filterKey;
+    if (pendingFirstEval) setPendingFirstEval(false);
 
     if (!hasRuntimeControls) {
-      // Remove filtered page param from URL
       const cleanUrl = new URL(window.location.href);
       if (cleanUrl.searchParams.has(fpKey)) {
         cleanUrl.searchParams.delete(fpKey);
         window.history.replaceState({}, '', cleanUrl.toString());
       }
 
-      // Reload when SSR content is stale: either we stripped a p_ param
-      // (pages mode — SSR was for a page other than 1) or load_more mode
-      // where LoadMoreCollection may have appended extra items to the DOM.
-      // Only reload when transitioning FROM active filters, not on initial load.
       if (strippedPaginationParamRef.current || (paginationMode === 'load_more' && !wasEmpty)) {
         strippedPaginationParamRef.current = false;
         const reloadUrl = new URL(window.location.href);
@@ -571,10 +623,10 @@ export default function FilterableCollection({
       setFilteredTotal(0);
       setFilteredLoaded(0);
       loadMoreOffsetRef.current = 0;
-      if (filteredRef.current) filteredRef.current.innerHTML = '';
+      clearFilteredDOM();
+      showSSR();
       detachPaginationIntercept();
       restoreSsrPagination();
-      // Restore SSR pagination visibility (may have been hidden)
       const wrapper = getSsrPaginationWrapper();
       if (wrapper) wrapper.style.display = '';
       updateEmptyStateElements(-1);
@@ -582,9 +634,8 @@ export default function FilterableCollection({
     }
 
     setHasActiveFilters(true);
+    hideSSR();
 
-    // On first activation (e.g. page load with filter + fp_ in URL), restore
-    // the persisted page. On subsequent filter changes, always reset to page 1.
     const currentUrl = new URL(window.location.href);
     const fpValue = currentUrl.searchParams.get(fpKey);
     const restoredPage = fpValue ? Math.max(1, parseInt(fpValue, 10) || 1) : 1;
@@ -593,23 +644,17 @@ export default function FilterableCollection({
     setFilteredPage(startPage);
     loadMoreOffsetRef.current = 0;
 
-    // Sync the fp_ param: remove it if resetting to page 1
     if (startPage <= 1 && currentUrl.searchParams.has(fpKey)) {
       currentUrl.searchParams.delete(fpKey);
       window.history.replaceState({}, '', currentUrl.toString());
     }
 
-    // Strip stale p_ pagination params from the URL since client-side
-    // filtering manages its own pagination independently of SSR pages.
     if (currentUrl.searchParams.has(pKey)) {
       currentUrl.searchParams.delete(pKey);
       window.history.replaceState({}, '', currentUrl.toString());
       strippedPaginationParamRef.current = true;
     }
 
-    // Both modes use the same intercept — pages for prev/next, load_more for
-    // the load more button. Either way we need to stop the SSR component's
-    // document-level listener from firing.
     if (paginationMode === 'pages' || paginationMode === 'load_more') {
       attachPaginationIntercept();
     }
@@ -618,41 +663,40 @@ export default function FilterableCollection({
     fetchFiltered(filterGroups, startOffset, false);
 
     return () => abortRef.current?.abort();
-  }, [filterValues, buildApiFilters, fetchFiltered, paginationMode, attachPaginationIntercept, detachPaginationIntercept, restoreSsrPagination, getSsrPaginationWrapper, updateEmptyStateElements, fpKey, pKey, limit, hasRuntimeSortOverride, effectiveSortBy, effectiveSortOrder]);
+  }, [filterValues, buildApiFilters, fetchFiltered, paginationMode, attachPaginationIntercept, detachPaginationIntercept, restoreSsrPagination, getSsrPaginationWrapper, updateEmptyStateElements, fpKey, pKey, limit, hasRuntimeSortOverride, effectiveSortBy, effectiveSortOrder, hideSSR, showSSR, clearFilteredDOM, hasInputLinkedFilters, pendingFirstEval]);
 
-  // Update SSR pagination display when filtered page/total changes (pages mode)
   useEffect(() => {
     if (!hasActiveFilters || paginationMode !== 'pages') return;
     updateSsrPaginationDisplay(filteredPage, filteredTotalPages);
   }, [hasActiveFilters, paginationMode, filteredPage, filteredTotalPages, updateSsrPaginationDisplay]);
 
-  // Update SSR load more display when filtered results change (load_more mode)
   useEffect(() => {
     if (!hasActiveFilters || paginationMode !== 'load_more') return;
     updateSsrLoadMoreDisplay(filteredLoaded, filteredTotal, filteredHasMore);
   }, [hasActiveFilters, paginationMode, filteredLoaded, filteredTotal, filteredHasMore, updateSsrLoadMoreDisplay]);
 
-  // Cleanup intercept on unmount
   useEffect(() => {
     return () => detachPaginationIntercept();
   }, [detachPaginationIntercept]);
 
+  // Loading state: apply opacity to the parent collection layer element
+  useEffect(() => {
+    const el = getParent();
+    if (!el) return;
+    if (isFiltering) {
+      el.style.opacity = '0.5';
+      el.style.pointerEvents = 'none';
+    } else {
+      el.style.opacity = '';
+      el.style.pointerEvents = '';
+    }
+  }, [isFiltering, getParent]);
+
+  // Zero DOM footprint: invisible marker + direct children
   return (
-    <div
-      className={`relative ${isFiltering ? 'opacity-50 pointer-events-none' : ''}`}
-      data-filterable-collection={collectionLayerId}
-    >
-      {isFiltering && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-10">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
-        </div>
-      )}
-
-      <div ref={ssrRef} style={{ display: hasActiveFilters ? 'none' : undefined }}>
-        {children}
-      </div>
-
-      <div ref={filteredRef} style={{ display: hasActiveFilters ? undefined : 'none' }} />
-    </div>
+    <>
+      <span ref={markerRef} style={{ display: 'none' }} />
+      {children}
+    </>
   );
 }

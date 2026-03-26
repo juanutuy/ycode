@@ -58,7 +58,9 @@ export default function InputSettings({ layer, onLayerUpdate }: InputSettingsPro
   // Get current attribute values
   const attributes = layer?.attributes || {};
   const inputType = attributes.type || 'text';
-  const placeholder = attributes.placeholder || '';
+  const placeholder = isSelectLayer
+    ? (layer?.settings?.placeholder || '')
+    : (attributes.placeholder || '');
   const value = attributes.value || '';
   const name = attributes.name || '';
   const isRequired = attributes.required === true || attributes.required === 'true';
@@ -95,6 +97,20 @@ export default function InputSettings({ layer, onLayerUpdate }: InputSettingsPro
           [key]: newValue,
         },
       });
+    },
+    [layer, onLayerUpdate]
+  );
+
+  const handleSelectPlaceholderChange = useCallback(
+    (newValue: string) => {
+      if (!layer) return;
+      const newSettings = { ...layer.settings };
+      if (newValue === '') {
+        delete newSettings.placeholder;
+      } else {
+        newSettings.placeholder = newValue;
+      }
+      onLayerUpdate(layer.id, { settings: newSettings });
     },
     [layer, onLayerUpdate]
   );
@@ -232,15 +248,18 @@ export default function InputSettings({ layer, onLayerUpdate }: InputSettingsPro
               </div>
             )}
 
-            {/* Placeholder - for input and textarea */}
-            {(isInputLayer || isTextareaLayer) && (
+            {/* Placeholder - for input, textarea, and select */}
+            {(isInputLayer || isTextareaLayer || isSelectLayer) && (
               <div className="grid grid-cols-3">
                 <Label variant="muted">Placeholder</Label>
                 <div className="col-span-2 *:w-full">
                   <Input
                     value={placeholder}
-                    onChange={(e) => handleAttributeChange('placeholder', e.target.value)}
-                    placeholder="Placeholder text"
+                    onChange={(e) => isSelectLayer
+                      ? handleSelectPlaceholderChange(e.target.value)
+                      : handleAttributeChange('placeholder', e.target.value)
+                    }
+                    placeholder={isSelectLayer ? 'Select...' : 'Placeholder text'}
                   />
                 </div>
               </div>

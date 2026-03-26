@@ -743,7 +743,9 @@ const LayerItem: React.FC<{
         if (!inputLayerId) return;
         const nameAttr = inputEl.getAttribute('name');
         if (nameAttr) nameMap[inputLayerId] = nameAttr;
-        const value = inputEl.type === 'checkbox' ? (inputEl as HTMLInputElement).checked.toString() : inputEl.value;
+        const value = inputEl.type === 'checkbox'
+          ? ((inputEl as HTMLInputElement).checked ? 'true' : '')
+          : inputEl.value;
         inputValues[inputLayerId] = value;
       });
       setFilterValues(filterLayerId, inputValues);
@@ -2018,10 +2020,17 @@ const LayerItem: React.FC<{
         delete elementProps.value;
       }
 
+      // When a placeholder is configured and no default value is set,
+      // default to the empty-value placeholder option.
+      if (layer.settings?.placeholder && !elementProps.defaultValue) {
+        elementProps.defaultValue = '';
+      }
+
       if (isEditMode && layer.settings?.optionsSource?.collectionId) {
+        const editPlaceholder = layer.settings?.placeholder || '(Options from collection)';
         return (
           <Tag {...elementProps}>
-            <option disabled value="">(Options from collection)</option>
+            <option disabled value="">{editPlaceholder}</option>
           </Tag>
         );
       }
@@ -2795,6 +2804,14 @@ const LayerItem: React.FC<{
         )}
 
         {textContent && textContent}
+
+        {/* Render placeholder option for select elements */}
+        {htmlTag === 'select' && layer.settings?.placeholder && (
+          <option
+            value="" disabled
+            hidden
+          >{layer.settings.placeholder}</option>
+        )}
 
         {/* Render children */}
         {effectiveChildren && effectiveChildren.length > 0 && (
