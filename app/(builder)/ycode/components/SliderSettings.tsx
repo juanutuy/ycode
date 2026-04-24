@@ -30,6 +30,7 @@ import { EFFECTS_WITH_PER_VIEW } from '@/lib/slider-utils';
 import { slidePrev, slideNext } from '@/hooks/use-canvas-slider';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
+import { useCollectionLayerStore } from '@/stores/useCollectionLayerStore';
 import {
   MULTI_ASSET_COLLECTION_ID,
   MULTI_ASSET_VIRTUAL_FIELDS,
@@ -89,14 +90,16 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
   const handleNext = useCallback(() => slideNext(sliderLayerId), [sliderLayerId]);
 
   const currentPageId = useEditorStore((state) => state.currentPageId);
+  const setSliderSnapCount = useEditorStore((state) => state.setSliderSnapCount);
   const addLayerWithId = usePagesStore((state) => state.addLayerWithId);
   const setSelectedLayerId = useEditorStore((state) => state.setSelectedLayerId);
+  const clearLayerData = useCollectionLayerStore((state) => state.clearLayerData);
 
   // Inner slides wrapper and the first slide inside it (the loop template when CMS-bound)
   const slidesLayer = useMemo(() => sliderLayer?.children?.find(c => c.name === 'slides') ?? null, [sliderLayer]);
   const templateSlide = useMemo(() => slidesLayer?.children?.find(c => c.name === 'slide') ?? null, [slidesLayer]);
   const templateSlideCollection = templateSlide ? getCollectionVariable(templateSlide) : null;
-  const isCmsSource = templateSlideCollection?.source_field_type === 'multi_asset';
+  const isCmsSource = !!templateSlideCollection?.id;
 
   // The CMS source option is only enabled if at least one multi-image field
   // is reachable from this slider's context (page or ancestor collections).
@@ -171,6 +174,9 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
         },
       };
 
+      // Clear any stale collection data from a previously-bound real collection
+      clearLayerData(templateSlide.id);
+
       // If extras exist, atomically replace the slides children with just the
       // updated template — collapsing extras and applying the binding in one update.
       if ((slidesLayer.children?.length ?? 0) > 1) {
@@ -188,8 +194,14 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
       onLayerUpdate(templateSlide.id, {
         variables: Object.keys(nextVars).length > 0 ? nextVars : undefined,
       });
+
+      // Clear stale collection data and snap count so pagination dots reset
+      clearLayerData(templateSlide.id);
+      if (sliderLayer) {
+        setSliderSnapCount(sliderLayer.id, 0);
+      }
     }
-  }, [slidesLayer, templateSlide, onLayerUpdate]);
+  }, [slidesLayer, templateSlide, onLayerUpdate, sliderLayer, clearLayerData, setSliderSnapCount]);
 
   // Guard: only render for slider-family layers
   if (!layer || !sliderLayer) return null;

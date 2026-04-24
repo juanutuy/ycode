@@ -1222,7 +1222,8 @@ const LayerItem: React.FC<{
         return ids.includes(parentId);
       });
     } else if (!sourceFieldId) {
-      items = allCollectionItems;
+      // Multi-asset without a selected field has no items to render
+      items = sourceFieldType === 'multi_asset' ? [] : allCollectionItems;
     } else {
       // Get the reference field value using source-aware resolution
       const refValue = resolveFieldFromSources(sourceFieldId, undefined, collectionLayerData, pageCollectionItemData);
