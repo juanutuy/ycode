@@ -82,7 +82,7 @@ export default function HeaderBar({
   const router = useRouter();
   const pathname = usePathname();
   const pageDropdownRef = useRef<HTMLDivElement>(null);
-  const { currentPageCollectionItemId, currentPageId: storeCurrentPageId, isPreviewMode, setPreviewMode, openFileManager, setKeyboardShortcutsOpen, setActiveSidebarTab, lastDesignUrl, setLastDesignUrl } = useEditorStore();
+  const { currentPageCollectionItemId, currentPageId: storeCurrentPageId, isPreviewMode, setPreviewMode, openFileManager, setKeyboardShortcutsOpen, setActiveSidebarTab, lastDesignUrl, setLastDesignUrl, previewReturnUrl, previewReturnTab, setPreviewReturn } = useEditorStore();
   const { folders, pages: storePages } = usePagesStore();
   const { items, fields, collections, selectedCollectionId: storeSelectedCollectionId, setSelectedCollectionId } = useCollectionsStore();
   const { locales, selectedLocaleId, setSelectedLocaleId, translations } = useLocalisationStore();
@@ -107,6 +107,16 @@ export default function HeaderBar({
       setOptimisticNav(null);
     }
   }, [routeType, optimisticNav]);
+
+  // Turn off preview mode only after navigation to the return route completes,
+  // keeping the preview overlay visible during the transition to avoid flashing
+  useEffect(() => {
+    if (!isPreviewMode || previewReturnUrl) return;
+    const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
+    if (!isDesignRoute) {
+      setPreviewMode(false);
+    }
+  }, [routeType, isPreviewMode, previewReturnUrl, setPreviewMode]);
 
   // Derive active button: optimistic state takes priority, then URL
   const activeNavButton = useMemo((): NavButton | null => {
@@ -590,6 +600,17 @@ export default function HeaderBar({
           variant="secondary"
           onClick={() => {
             if (isPreviewMode) {
+              if (previewReturnUrl) {
+                // Navigate back while keeping preview visible — the useEffect
+                // above will turn off preview once the route change completes
+                if (previewReturnTab) {
+                  setActiveSidebarTab(previewReturnTab);
+                }
+                router.push(previewReturnUrl);
+                setPreviewReturn(null);
+                return;
+              }
+
               setPreviewMode(false);
               updateQueryParams({ preview: undefined });
               return;
@@ -601,6 +622,7 @@ export default function HeaderBar({
             // route (CMS, forms, etc.) we need to jump to the layers view first
             const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
             if (!isDesignRoute && currentPageId) {
+              setPreviewReturn(window.location.pathname + window.location.search, activeTab);
               setActiveSidebarTab('layers');
               const params = new URLSearchParams(window.location.search);
               params.set('preview', 'true');
